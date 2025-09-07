@@ -63,7 +63,6 @@ def filter_and_classify_pills(image, contours, params):
 # --- Detector Functions (Now all are "General Detectors") ---
 def get_contours_adaptive_color(image, params):
     """Your original, proven adaptive contour detection algorithm."""
-    # (Rest of this function is the same as your working version)
     def is_background_light(img):
         h, w, _ = img.shape
         corner_size = int(min(h, w) * 0.1)
@@ -112,38 +111,26 @@ def get_contours_watershed(image, params):
         all_contours.extend(contours)
     return all_contours
 
-# --- [NEW] Detector 4: Hough Circle Transform ---
 def get_contours_hough_circles(image, params):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.medianBlur(gray, 5) # Median blur is effective for salt-and-pepper noise
-    circles = cv2.HoughCircles(
-        blurred, 
-        cv2.HOUGH_GRADIENT, 
-        dp=1, 
-        minDist=params['hough_min_dist'],
-        param1=params['hough_param1'], 
-        param2=params['hough_param2'], 
-        minRadius=params['hough_min_radius'], 
-        maxRadius=params['hough_max_radius']
-    )
+    blurred = cv2.medianBlur(gray, 5)
+    circles = cv2.HoughCircles(blurred, cv2.HOUGH_GRADIENT, dp=1, minDist=params['hough_min_dist'],
+                              param1=params['hough_param1'], param2=params['hough_param2'],
+                              minRadius=params['hough_min_radius'], maxRadius=params['hough_max_radius'])
     contours = []
     if circles is not None:
         circles = np.uint16(np.around(circles))
         for i in circles[0, :]:
-            center = (i[0], i[1])
-            radius = i[2]
-            # Create a circular contour from the detected circle
+            center, radius = (i[0], i[1]), i[2]
             t = np.arange(0, 2 * np.pi, 0.1)
             pts = np.array([center[0] + radius * np.cos(t), center[1] + radius * np.sin(t)]).T.astype(np.int32)
             contours.append(pts.reshape((-1, 1, 2)))
     return contours
 
-# --- [NEW] Detector 5: Simple Blob Detector ---
 def get_contours_blob_detector(image, params):
     blob_params = cv2.SimpleBlobDetector_Params()
     blob_params.filterByArea = True
-    blob_params.minArea = params['min_area']
-    blob_params.maxArea = params['max_area']
+    blob_params.minArea, blob_params.maxArea = params['min_area'], params['max_area']
     blob_params.filterByCircularity = True
     blob_params.minCircularity = params['blob_min_circularity']
     blob_params.filterByConvexity = True
@@ -152,11 +139,9 @@ def get_contours_blob_detector(image, params):
     blob_params.minInertiaRatio = 0.01
     detector = cv2.SimpleBlobDetector_create(blob_params)
     keypoints = detector.detect(image)
-    
     contours = []
     for kp in keypoints:
-        center = (int(kp.pt[0]), int(kp.pt[1]))
-        radius = int(kp.size / 2)
+        center, radius = (int(kp.pt[0]), int(kp.pt[1])), int(kp.size / 2)
         t = np.arange(0, 2 * np.pi, 0.1)
         pts = np.array([center[0] + radius * np.cos(t), center[1] + radius * np.sin(t)]).T.astype(np.int32)
         contours.append(pts.reshape((-1, 1, 2)))
@@ -189,11 +174,11 @@ with st.sidebar:
             params['canny_thresh2'] = st.slider("Canny Threshold 2", 0, 255, 150)
         elif detector_name == "Hough Circle Transform":
             st.markdown("##### Hough Circle Tuning")
-            params['hough_min_dist'] = st.slider("Min Distance Between Circles", 10, 100, 20)
+            params['hough_min_dist'] = st.slider("Min Distance", 10, 100, 20)
             params['hough_param1'] = st.slider("Canny Edge Upper Threshold", 50, 250, 100)
             params['hough_param2'] = st.slider("Accumulator Threshold", 10, 100, 30)
-            params['hough_min_radius'] = st.slider("Min Circle Radius", 5, 50, 10)
-            params['hough_max_radius'] = st.slider("Max Circle Radius", 50, 200, 80)
+            params['hough_min_radius'] = st.slider("Min Radius", 5, 50, 10)
+            params['hough_max_radius'] = st.slider("Max Radius", 50, 200, 80)
         elif detector_name == "Simple Blob Detector":
             st.markdown("##### Blob Detector Tuning")
             params['blob_min_circularity'] = st.slider("Min Circularity", 0.1, 1.0, 0.8, 0.05)
@@ -222,11 +207,9 @@ with main_col:
 
         st.divider()
 
-        # --- Execution Logic ---
         button_label = "Run Full Image Detection" if analysis_mode == "Full Image Detection" else "Find All Matching Pills"
         if st.button(button_label, use_container_width=True):
             with st.spinner("Analyzing..."):
-                # --- A: Full Image Detection Workflow ---
                 if analysis_mode == "Full Image Detection":
                     contours = detector_options[detector_name](st.session_state.img, params)
                     detected_pills = filter_and_classify_pills(st.session_state.img, contours, params)
@@ -240,9 +223,9 @@ with main_col:
                     st.image(annotated_image, channels="BGR")
                     if detected_pills:
                         df = pd.DataFrame(detected_pills).drop(columns='contour')
-                        st.dataframe(df.groupby(['shape', 'color']).size().reset_index(name='quantity'))
+                        summary_df = df.groupby(['shape', 'color']).size().reset_index(name='quantity')
+                        st.dataframe(summary_df, use_container_width=True)
 
-                # --- B: Manual ROI (Matching Pills) Workflow ---
                 elif analysis_mode == "Manual ROI (Matching Pills)":
                     roi = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
                     if roi.size < 100:
@@ -262,9 +245,18 @@ with main_col:
                             for pill in matches:
                                 x,y,w,h = cv2.boundingRect(pill['contour'])
                                 cv2.rectangle(annotated_image, (x,y), (x+w,y+h), (0,255,255), 3)
+                            
                             st.subheader("Matching Results")
                             st.metric(f"Found {len(matches)} matches for:", f"{target['shape']}, {target['color']}")
                             st.image(annotated_image, channels="BGR")
+                            
+                            # --- [NEW] ADDED SUMMARY DATAFRAME FOR ROI MATCHING ---
+                            match_data = {
+                                'Target Shape': [target['shape']],
+                                'Target Color': [target['color']],
+                                'Quantity Found': [len(matches)]
+                            }
+                            st.dataframe(pd.DataFrame(match_data), use_container_width=True)
 
     elif not uploaded_file:
          st.info("Awaiting image upload to begin.")

@@ -43,7 +43,7 @@ def get_pill_properties(image_bgr, contour):
 
 # --- [KEY FUNCTION] Central Pill Filtering and Classification ---
 def filter_and_classify_pills(image, contours, params):
-    """Applies the original, robust filtering logic to any list of contours."""
+    """Applies your original, robust filtering logic to any list of contours."""
     detected_pills = []
     for c in contours:
         area = cv2.contourArea(c)
@@ -62,30 +62,33 @@ def filter_and_classify_pills(image, contours, params):
 
 # --- Detector Functions (Part 1: Contour Generators) ---
 def get_contours_adaptive_color(image, params):
-    """Your original adaptive contour detection algorithm."""
+    """Your original, proven adaptive contour detection algorithm."""
     def is_background_light(img):
         h, w, _ = img.shape
         corner_size = int(min(h, w) * 0.1)
         corners = [img[0:corner_size, 0:corner_size], img[0:corner_size, w-corner_size:w], img[h-corner_size:h, 0:corner_size], img[h-corner_size:h, w-corner_size:w]]
         return np.mean([cv2.cvtColor(c, cv2.COLOR_BGR2GRAY).mean() for c in corners]) > 120
 
-    if is_background_light(image):
-        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_bound = np.array([0, 40, 50])
-        upper_bound = np.array([180, 255, 255])
-        color_mask = cv2.inRange(hsv, lower_bound, upper_bound)
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        _, white_mask = cv2.threshold(gray, 210, 255, cv2.THRESH_BINARY)
-        final_mask = cv2.bitwise_or(color_mask, white_mask)
-    else:
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    # These are your original, fine-tuned functions for mask generation
+    def detect_on_dark_bg(img):
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l, _, _ = cv2.split(lab)
         blurred = cv2.GaussianBlur(l, (5, 5), 0)
-        _, final_mask = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        return cv2.morphologyEx(cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel, iterations=3), cv2.MORPH_OPEN, kernel, iterations=2)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-    cleaned_mask = cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
-    contours, _ = cv2.findContours(cleaned_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    def detect_on_light_bg(img):
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, np.array([0, 40, 50]), np.array([180, 255, 255]))
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, white_mask = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        final_mask = cv2.bitwise_or(mask, cv2.dilate(white_mask, np.ones((3,3), np.uint8), iterations=2))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        return cv2.morphologyEx(cv2.morphologyEx(final_mask, cv2.MORPH_CLOSE, kernel, iterations=3), cv2.MORPH_OPEN, kernel, iterations=2)
+
+    final_mask = detect_on_light_bg(image) if is_background_light(image) else detect_on_dark_bg(image)
+    contours, _ = cv2.findContours(final_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     return contours
 
 def get_contours_canny(image, params):
@@ -116,7 +119,6 @@ def get_contours_watershed(image, params):
 
 # --- Detector Functions (Part 2: Template Matchers) ---
 def find_template_matches(image, template, params):
-    """Finds all occurrences of a template in an image."""
     if template.size < 100: return []
     main_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
@@ -128,7 +130,6 @@ def find_template_matches(image, template, params):
     return rects
 
 def find_feature_match(image, template):
-    """Finds the best match for a template using ORB features."""
     if template.size < 100: return None
     main_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
@@ -150,7 +151,6 @@ def find_feature_match(image, template):
     return None
 
 # --- Streamlit App UI and Logic ---
-
 st.set_page_config(layout="wide")
 st.title("Pharmaceutical Tablet Analysis System")
 
@@ -158,7 +158,7 @@ st.title("Pharmaceutical Tablet Analysis System")
 with st.sidebar:
     st.title("⚙️ Controls")
     detector_options = {
-        "Contour-Based (Original)": get_contours_adaptive_color,
+        "Contour-Based (Original Accurate)": get_contours_adaptive_color,
         "Edge-Based (Canny)": get_contours_canny,
         "Watershed Segmentation": get_contours_watershed,
         "Template Matching": find_template_matches,
@@ -167,8 +167,8 @@ with st.sidebar:
     detector_name = st.selectbox("1. Select Detector Algorithm", detector_options.keys())
     analysis_mode = st.radio("2. Select Analysis Mode", ("Full Image Detection", "Manual ROI (Matching Pills)"))
     with st.expander("🔬 Tuning & Advanced Options"):
-        min_area = st.slider("Min Pill Area", 50, 5000, 500)
-        max_area = st.slider("Max Pill Area", 5000, 100000, 50000)
+        min_area = st.slider("Min Pill Area", 50, 5000, 500, key="min_area_slider")
+        max_area = st.slider("Max Pill Area", 5000, 100000, 50000, key="max_area_slider")
         params = {'min_area': min_area, 'max_area': max_area}
         if detector_name == "Edge-Based (Canny)":
             params['canny_thresh1'] = st.slider("Canny Threshold 1", 0, 255, 30)
@@ -187,19 +187,17 @@ with main_col:
         orig_img = np.array(pil_img)
         scale = 800 / orig_img.shape[1]
         new_size = (int(orig_img.shape[1] * scale), int(orig_img.shape[0] * scale))
-        # *** FIX: Corrected the typo from COLOR_RGB_BGR to COLOR_RGB2BGR ***
         st.session_state.img = cv2.cvtColor(cv2.resize(orig_img, new_size), cv2.COLOR_RGB2BGR)
 
     if 'img' in st.session_state and st.session_state.img is not None:
         st.subheader("Image Analysis")
         
-        is_contour_detector = detector_name in ["Contour-Based (Original)", "Edge-Based (Canny)", "Watershed Segmentation"]
+        is_contour_detector = detector_name in ["Contour-Based (Original Accurate)", "Edge-Based (Canny)", "Watershed Segmentation"]
         is_template_detector = detector_name in ["Template Matching", "Feature-Based Matching"]
 
         # --- Display Area and ROI Cropper ---
         if analysis_mode == "Manual ROI (Matching Pills)":
             st.warning("Draw a box on the image to define the target pill for matching.")
-            # *** FIX: The cropper returns the cropped PIL image, not an object with a .box attribute ***
             cropped_pil = st_cropper(Image.fromarray(cv2.cvtColor(st.session_state.img, cv2.COLOR_BGR2RGB)), realtime_update=True, box_color='lime')
         else:
             st.image(st.session_state.img, channels="BGR", caption="Full image ready for analysis.")
@@ -210,7 +208,7 @@ with main_col:
         if analysis_mode == "Full Image Detection":
             if st.button("Run Full Image Detection", use_container_width=True):
                 if is_template_detector:
-                    st.error(f"'{detector_name}' requires 'Manual ROI' mode to select a template.")
+                    st.error(f"'{detector_name}' requires 'Manual ROI' mode to select a template. Please switch the analysis mode in the sidebar.")
                 else:
                     with st.spinner("Analyzing..."):
                         contours = detector_options[detector_name](st.session_state.img, params)
@@ -230,7 +228,6 @@ with main_col:
 
         elif analysis_mode == "Manual ROI (Matching Pills)":
             if st.button("Find All Matching Pills", use_container_width=True):
-                # *** FIX: Convert the returned PIL image to an OpenCV image ***
                 roi = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
                 if roi.size < 100:
                     st.error("Please draw a valid box on the image.")
@@ -238,8 +235,9 @@ with main_col:
                     with st.spinner("Finding matches..."):
                         # --- Logic for Contour-Based Matching (Your Original Method) ---
                         if is_contour_detector:
-                            roi_contours = detector_options[detector_name](roi, params)
-                            target_pills = filter_and_classify_pills(roi, roi_contours, params)
+                            roi_params = {'min_area': 10, 'max_area': roi.shape[0] * roi.shape[1]}
+                            roi_contours = detector_options[detector_name](roi, roi_params)
+                            target_pills = filter_and_classify_pills(roi, roi_contours, roi_params)
                             if not target_pills:
                                 st.error("Could not identify a valid pill in the selected ROI. Please try again.")
                             else:
@@ -260,7 +258,7 @@ with main_col:
                         # --- Logic for Template-Based Matching ---
                         elif is_template_detector:
                             annotated_image = st.session_state.img.copy()
-                            template = roi # The cropped region is the template
+                            template = roi
                             
                             if detector_name == "Template Matching":
                                 matches = find_template_matches(st.session_state.img, template, params)

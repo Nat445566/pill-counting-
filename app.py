@@ -69,7 +69,6 @@ def get_contours_adaptive_color(image, params):
         corners = [img[0:corner_size, 0:corner_size], img[0:corner_size, w-corner_size:w], img[h-corner_size:h, 0:corner_size], img[h-corner_size:h, w-corner_size:w]]
         return np.mean([cv2.cvtColor(c, cv2.COLOR_BGR2GRAY).mean() for c in corners]) > 120
 
-    # These are your original, fine-tuned functions for mask generation
     def detect_on_dark_bg(img):
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l, _, _ = cv2.split(lab)
@@ -92,7 +91,6 @@ def get_contours_adaptive_color(image, params):
     return contours
 
 def get_contours_canny(image, params):
-    """Generates contours using Canny edge detection."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (7, 7), 0)
     edges = cv2.Canny(blurred, params['canny_thresh1'], params['canny_thresh2'])
@@ -100,7 +98,6 @@ def get_contours_canny(image, params):
     return contours
 
 def get_contours_watershed(image, params):
-    """Generates contours by separating touching objects with Watershed."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     kernel = np.ones((3, 3), np.uint8)
@@ -142,7 +139,7 @@ def find_feature_match(image, template):
     good = [m for pair in matches if len(pair) == 2 for m, n in [pair] if m.distance < 0.75 * n.distance]
     if len(good) > 10:
         src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
+        dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(--1, 1, 2)
         M, _ = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
         if M is None: return None
         h, w = template_gray.shape
@@ -194,23 +191,38 @@ with main_col:
         
         is_contour_detector = detector_name in ["Contour-Based (Original Accurate)", "Edge-Based (Canny)", "Watershed Segmentation"]
         is_template_detector = detector_name in ["Template Matching", "Feature-Based Matching"]
+        
+        # --- UI Setup: Decide whether to show cropper based on mode/detector ---
+        # The cropper is ALWAYS shown for Manual ROI mode.
+        # For Full Image mode, it's ONLY shown if a template detector is selected.
+        show_cropper = (analysis_mode == "Manual ROI (Matching Pills)") or \
+                       (analysis_mode == "Full Image Detection" and is_template_detector)
 
-        # --- Display Area and ROI Cropper ---
-        if analysis_mode == "Manual ROI (Matching Pills)":
-            st.warning("Draw a box on the image to define the target pill for matching.")
+        if show_cropper:
+            if analysis_mode == "Full Image Detection":
+                 st.info(f"'{detector_name}' requires a template. Please draw a box around a single pill to search for in the full image.")
+            else: # Manual ROI mode
+                 st.warning("Draw a box on the image to define the target pill for matching.")
             cropped_pil = st_cropper(Image.fromarray(cv2.cvtColor(st.session_state.img, cv2.COLOR_BGR2RGB)), realtime_update=True, box_color='lime')
-        else:
+        else: # Full Image mode with a contour detector
             st.image(st.session_state.img, channels="BGR", caption="Full image ready for analysis.")
 
         st.divider()
 
-        # --- Main Execution Logic ---
+        # --- Execution Logic ---
+        button_label = "Run Analysis"
         if analysis_mode == "Full Image Detection":
-            if st.button("Run Full Image Detection", use_container_width=True):
-                if is_template_detector:
-                    st.error(f"'{detector_name}' requires 'Manual ROI' mode to select a template. Please switch the analysis mode in the sidebar.")
-                else:
-                    with st.spinner("Analyzing..."):
+            button_label = "Run Full Image Detection"
+            if is_template_detector:
+                button_label = "Find All Matches in Full Image"
+        elif analysis_mode == "Manual ROI (Matching Pills)":
+            button_label = "Find All Matching Pills"
+
+        if st.button(button_label, use_container_width=True):
+            with st.spinner("Analyzing..."):
+                # --- A: Full Image Detection Workflow ---
+                if analysis_mode == "Full Image Detection":
+                    if is_contour_detector:
                         contours = detector_options[detector_name](st.session_state.img, params)
                         detected_pills = filter_and_classify_pills(st.session_state.img, contours, params)
                         annotated_image = st.session_state.img.copy()
@@ -218,62 +230,69 @@ with main_col:
                             x,y,w,h = cv2.boundingRect(pill['contour'])
                             cv2.rectangle(annotated_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
                             cv2.putText(annotated_image, f"{pill['shape']}, {pill['color']}", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,0), 2)
-
                         st.subheader("Detection Results")
                         st.metric("Total Pills Found", len(detected_pills))
                         st.image(annotated_image, channels="BGR")
                         if detected_pills:
                             df = pd.DataFrame(detected_pills).drop(columns='contour')
                             st.dataframe(df.groupby(['shape', 'color']).size().reset_index(name='quantity'))
-
-        elif analysis_mode == "Manual ROI (Matching Pills)":
-            if st.button("Find All Matching Pills", use_container_width=True):
-                roi = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
-                if roi.size < 100:
-                    st.error("Please draw a valid box on the image.")
-                else:
-                    with st.spinner("Finding matches..."):
-                        # --- Logic for Contour-Based Matching (Your Original Method) ---
-                        if is_contour_detector:
-                            roi_params = {'min_area': 10, 'max_area': roi.shape[0] * roi.shape[1]}
-                            roi_contours = detector_options[detector_name](roi, roi_params)
-                            target_pills = filter_and_classify_pills(roi, roi_contours, roi_params)
-                            if not target_pills:
-                                st.error("Could not identify a valid pill in the selected ROI. Please try again.")
-                            else:
-                                target = target_pills[0]
-                                all_contours = detector_options[detector_name](st.session_state.img, params)
-                                all_pills = filter_and_classify_pills(st.session_state.img, all_contours, params)
-                                matches = [p for p in all_pills if p['shape'] == target['shape'] and p['color'] == target['color']]
-                                
-                                annotated_image = st.session_state.img.copy()
-                                for pill in matches:
-                                    x,y,w,h = cv2.boundingRect(pill['contour'])
-                                    cv2.rectangle(annotated_image, (x,y), (x+w,y+h), (0,255,255), 3)
-                                
-                                st.subheader("Matching Results")
-                                st.metric(f"Found {len(matches)} matches for:", f"{target['shape']}, {target['color']}")
-                                st.image(annotated_image, channels="BGR")
-
-                        # --- Logic for Template-Based Matching ---
-                        elif is_template_detector:
+                    
+                    elif is_template_detector: # Guided template matching
+                        template = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
+                        if template.size < 100:
+                            st.error("Please draw a valid box on the image to use as a template.")
+                        else:
                             annotated_image = st.session_state.img.copy()
-                            template = roi
-                            
                             if detector_name == "Template Matching":
                                 matches = find_template_matches(st.session_state.img, template, params)
                                 for (x, y, w, h) in matches:
                                     cv2.rectangle(annotated_image, (x, y), (x+w, y+h), (255,0,0), 3)
                                 st.metric("Template Matches Found", len(matches))
-                            
                             elif detector_name == "Feature-Based Matching":
                                 match_poly = find_feature_match(st.session_state.img, template)
+                                st.metric("Feature Matches Found", 1 if match_poly is not None else 0)
                                 if match_poly is not None:
                                     cv2.polylines(annotated_image, [match_poly], True, (255,0,255), 3)
-                                    st.metric("Feature Match Found", 1)
-                                else:
-                                    st.metric("Feature Match Found", 0)
-                            
+                            st.subheader("Matching Results")
+                            st.image(annotated_image, channels="BGR")
+
+                # --- B: Manual ROI (Matching Pills) Workflow ---
+                elif analysis_mode == "Manual ROI (Matching Pills)":
+                    roi = cv2.cvtColor(np.array(cropped_pil), cv2.COLOR_RGB2BGR)
+                    if roi.size < 100:
+                        st.error("Please draw a valid box on the image.")
+                    else:
+                        if is_contour_detector:
+                            roi_params = {'min_area': 10, 'max_area': roi.shape[0] * roi.shape[1]}
+                            roi_contours = detector_options[detector_name](roi, roi_params)
+                            target_pills = filter_and_classify_pills(roi, roi_contours, roi_params)
+                            if not target_pills:
+                                st.error("Could not identify a valid pill in the selected ROI.")
+                            else:
+                                target = target_pills[0]
+                                all_contours = detector_options[detector_name](st.session_state.img, params)
+                                all_pills = filter_and_classify_pills(st.session_state.img, all_contours, params)
+                                matches = [p for p in all_pills if p['shape'] == target['shape'] and p['color'] == target['color']]
+                                annotated_image = st.session_state.img.copy()
+                                for pill in matches:
+                                    x,y,w,h = cv2.boundingRect(pill['contour'])
+                                    cv2.rectangle(annotated_image, (x,y), (x+w,y+h), (0,255,255), 3)
+                                st.subheader("Matching Results")
+                                st.metric(f"Found {len(matches)} matches for:", f"{target['shape']}, {target['color']}")
+                                st.image(annotated_image, channels="BGR")
+
+                        elif is_template_detector: # This logic is identical to the guided full-image search
+                            annotated_image = st.session_state.img.copy()
+                            if detector_name == "Template Matching":
+                                matches = find_template_matches(st.session_state.img, roi, params)
+                                for (x, y, w, h) in matches:
+                                    cv2.rectangle(annotated_image, (x, y), (x+w, y+h), (255,0,0), 3)
+                                st.metric("Template Matches Found", len(matches))
+                            elif detector_name == "Feature-Based Matching":
+                                match_poly = find_feature_match(st.session_state.img, roi)
+                                st.metric("Feature Matches Found", 1 if match_poly is not None else 0)
+                                if match_poly is not None:
+                                    cv2.polylines(annotated_image, [match_poly], True, (255,0,255), 3)
                             st.subheader("Matching Results")
                             st.image(annotated_image, channels="BGR")
 
